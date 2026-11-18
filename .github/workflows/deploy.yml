@@ -37,7 +37,7 @@ jobs:
     name: Publicar e implantar
     needs: test
     runs-on: ubuntu-latest
-    environment: production
+    environment: trabalho.api
 
     steps:
       - name: Baixar codigo
@@ -64,7 +64,7 @@ jobs:
 
       - name: Preparar acesso SSH
         env:
-          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           SSH_HOST_KEY: ${{ secrets.EC2_HOST_KEY }}
         run: |
           mkdir -p ~/.ssh
