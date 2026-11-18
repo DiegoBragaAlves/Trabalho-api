@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -6,8 +7,6 @@ app = FastAPI(
     description="API didática para demonstrar testes, CI e Docker.",
     version="1.0.0",
 )
-
-
 
 
 class TaskCreate(BaseModel):
@@ -59,4 +58,5 @@ def complete_task(task_id: int) -> Task:
         if task.id == task_id:
             task.done = True
             return task
+
     raise HTTPException(status_code=404, detail="Tarefa não encontrada")
