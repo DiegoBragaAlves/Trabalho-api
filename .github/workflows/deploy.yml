@@ -1,5 +1,5 @@
 
-name: Deploy AWS EC2
+name: Deploy AWS EC2 via ECR
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-production
+  group: deploy-ec2
   cancel-in-progress: false
 
 jobs:
@@ -33,13 +33,12 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Executar testes
-        run: pytest
+        run: python -m pytest
 
   deploy:
-    name: Publicar e implantar
+    name: Publicar no ECR e implantar na EC2
     needs: test
     runs-on: ubuntu-latest
-    environment: trabalho.api
 
     steps:
       - name: Baixar codigo
@@ -64,28 +63,31 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
-          docker build -t "$REGISTRY/$REPOSITORY:$IMAGE_TAG" .
-          docker push "$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          IMAGE="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
 
-      - name: Preparar acesso SSH
+      - name: Configurar SSH
         env:
-          SSH_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          SSH_KEY_B64: ${{ secrets.EC2_SSH_PRIVATE_KEY_B64 }}
           SSH_HOST_KEY: ${{ secrets.EC2_HOST_KEY }}
         run: |
           set -euo pipefail
-          test -n "$SSH_KEY"
-          test -n "$SSH_HOST_KEY"
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+
+          printf '%s' "$SSH_KEY_B64" | base64 --decode > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null
+
           printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Implantar na EC2
+      - name: Implantar imagem do ECR na EC2
         env:
-          EC2_HOST: ${{ vars.EC2_HOST }}
-          EC2_USER: ${{ vars.EC2_USER }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
           AWS_REGION: us-east-1
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           REPOSITORY: devops-python-api
@@ -93,13 +95,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          : "${EC2_HOST:?EC2_HOST nao configurado}"
-          : "${EC2_USER:?EC2_USER nao configurado}"
-
           IMAGE="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
 
-          ssh -o StrictHostKeyChecking=yes \
-            -i ~/.ssh/id_ed25519 \
+          ssh -i ~/.ssh/id_ed25519 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
             "$EC2_USER@$EC2_HOST" \
             bash -se -- "$AWS_REGION" "$REGISTRY" "$IMAGE" <<'REMOTE'
           set -euo pipefail
@@ -125,7 +125,7 @@ jobs:
 
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:8000/health; then
-              echo "Deploy concluido com sucesso"
+              echo "Deploy realizado com sucesso!"
               exit 0
             fi
             sleep 3
