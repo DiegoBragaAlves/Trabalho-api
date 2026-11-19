@@ -17,6 +17,7 @@ jobs:
   deploy:
     name: Deploy na EC2
     runs-on: ubuntu-latest
+    environment: trabalho.api
 
     env:
       AWS_REGION: us-east-1
@@ -45,6 +46,7 @@ jobs:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -euo pipefail
           docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
@@ -53,21 +55,50 @@ jobs:
           SSH_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           SSH_HOST_KEY: ${{ secrets.EC2_HOST_KEY }}
         run: |
+          set -euo pipefail
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_rsa
+
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::EC2_SSH_PRIVATE_KEY nao configurada."
+            exit 1
+          fi
+
+          if [ -z "$SSH_HOST_KEY" ]; then
+            echo "::error::EC2_HOST_KEY nao configurada."
+            exit 1
+          fi
+
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+
+          if ! ssh-keygen -y -P "" -f ~/.ssh/id_rsa > /dev/null 2>&1; then
+            echo "::error::Chave SSH invalida ou protegida por senha."
+            exit 1
+          fi
+
           printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+          ssh-keygen -F "$EC2_HOST" -f ~/.ssh/known_hosts > /dev/null || {
+            echo "::error::Host EC2 nao encontrado em known_hosts."
+            exit 1
+          }
 
       - name: Deploy na instancia EC2
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -euo pipefail
+
           IMAGE="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-          ssh -o StrictHostKeyChecking=yes \
+          ssh -i ~/.ssh/id_rsa \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
             "$EC2_USER@$EC2_HOST" \
             "bash -se" -- "$AWS_REGION" "$REGISTRY" "$IMAGE" <<'REMOTE'
           set -euo pipefail
