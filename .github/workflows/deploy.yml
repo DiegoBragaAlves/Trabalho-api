@@ -1,0 +1,136 @@
+
+name: Deploy AWS EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Testes automatizados
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Executar testes
+        run: pytest
+
+  deploy:
+    name: Publicar e implantar
+    needs: test
+    runs-on: ubuntu-latest
+    environment: trabalho.api
+
+    steps:
+      - name: Baixar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar AWS Academy
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Login no Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Construir e publicar Docker
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: devops-python-api
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker build -t "$REGISTRY/$REPOSITORY:$IMAGE_TAG" .
+          docker push "$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+
+      - name: Preparar acesso SSH
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          SSH_HOST_KEY: ${{ secrets.EC2_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"
+          test -n "$SSH_HOST_KEY"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Implantar na EC2
+        env:
+          EC2_HOST: ${{ vars.EC2_HOST }}
+          EC2_USER: ${{ vars.EC2_USER }}
+          AWS_REGION: us-east-1
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: devops-python-api
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          : "${EC2_HOST:?EC2_HOST nao configurado}"
+          : "${EC2_USER:?EC2_USER nao configurado}"
+
+          IMAGE="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+
+          ssh -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/id_ed25519 \
+            "$EC2_USER@$EC2_HOST" \
+            bash -se -- "$AWS_REGION" "$REGISTRY" "$IMAGE" <<'REMOTE'
+          set -euo pipefail
+
+          REGION="$1"
+          REGISTRY="$2"
+          IMAGE="$3"
+
+          aws ecr get-login-password --region "$REGION" |
+            sudo docker login \
+              --username AWS \
+              --password-stdin "$REGISTRY"
+
+          sudo docker pull "$IMAGE"
+
+          sudo docker rm -f devops-python-api || true
+
+          sudo docker run -d \
+            --name devops-python-api \
+            --restart unless-stopped \
+            -p 8000:8000 \
+            "$IMAGE"
+
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8000/health; then
+              echo "Deploy concluido com sucesso"
+              exit 0
+            fi
+            sleep 3
+          done
+
+          sudo docker logs devops-python-api
+          exit 1
+          REMOTE

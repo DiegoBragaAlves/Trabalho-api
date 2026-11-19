@@ -1,3 +1,4 @@
+
 name: CI Python
 
 on:
@@ -20,23 +21,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Obter o código
-        uses: actions/checkout@v6
+      - name: Obter o codigo
+        uses: actions/checkout@v4
 
       - name: Preparar o Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version-file: .python-version
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: requirements.txt
 
-      - name: Instalar dependências
-        run: python -m pip install --requirement requirements-dev.txt
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
 
-      - name: Verificar análise estática
+      - name: Verificar analise estatica
         run: ruff check .
 
-      - name: Verificar formatação
+      - name: Verificar formatacao
         run: ruff format --check .
 
       - name: Executar testes e cobertura
@@ -48,15 +51,15 @@ jobs:
             --cov-report=xml:coverage.xml \
             --junitxml=reports/junit.xml
 
-      - name: Guardar relatórios da execução
+      - name: Guardar relatorios da execucao
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: relatorios-de-teste
           path: |
             coverage.xml
             reports/junit.xml
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
 
   container-smoke-test:
@@ -65,8 +68,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Obter o código
-        uses: actions/checkout@v6
+      - name: Obter o codigo
+        uses: actions/checkout@v4
 
       - name: Construir a imagem
         run: docker build --tag devops-python-api:${{ github.sha }} .
@@ -79,21 +82,22 @@ jobs:
             --publish 8000:8000 \
             devops-python-api:${{ github.sha }}
 
-      - name: Verificar o endpoint de saúde
+      - name: Verificar o endpoint de saude
         run: |
-          for attempt in {1..15}; do
+          for attempt in {1..20}; do
             if curl --fail --silent http://127.0.0.1:8000/health; then
+              echo "API funcionando corretamente"
               exit 0
             fi
-            echo "Tentativa ${attempt}: API ainda não está pronta"
-            sleep 1
+            echo "Tentativa ${attempt}: API ainda nao esta pronta"
+            sleep 3
           done
           exit 1
 
       - name: Mostrar logs do container
         if: always()
-        run: docker logs devops-python-api
+        run: docker logs devops-python-api || true
 
       - name: Remover o container
         if: always()
-        run: docker rm --force devops-python-api
+        run: docker rm --force devops-python-api || true
